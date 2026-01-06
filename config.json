@@ -1,0 +1,17 @@
+{
+  "keywords": [
+    "大阪 salesforce 導入支援",
+    "大阪 salesforce",
+    "salesforce 大阪",
+    "Salesforce導入支援",
+    "Salesforce伴走支援"
+  ],
+  "target_url": "https://shinonome.llc/",
+  "max_results_to_check": 10,
+  "delay_between_searches": [5, 12],
+  "delay_between_clicks": [3, 8],
+  "headless": false,
+  "use_persistent_context": true,
+  "wait_for_captcha_manual": true
+}
+
