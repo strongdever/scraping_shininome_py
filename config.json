@@ -12,6 +12,9 @@
   "delay_between_clicks": [3, 8],
   "headless": false,
   "use_persistent_context": true,
-  "wait_for_captcha_manual": true
+  "wait_for_captcha_manual": true,
+  "skip_captcha": false,
+  "captcha_service": "2captcha",
+  "captcha_api_key": "YOUR_2CAPTCHA_API_KEY_HERE"
 }
 

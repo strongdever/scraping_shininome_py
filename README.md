@@ -64,6 +64,9 @@ Edit `config.json` to customize:
 - **headless**: Set to `true` to run browser in background, `false` to see the browser
 - **use_persistent_context**: Set to `true` to maintain cookies/session between runs (reduces CAPTCHA)
 - **wait_for_captcha_manual**: Set to `true` to wait for you to manually solve CAPTCHA, `false` to skip searches with CAPTCHA
+- **skip_captcha**: Set to `true` to immediately skip searches when CAPTCHA appears (no waiting)
+- **captcha_service**: Set to `"2captcha"` or `"anticaptcha"` for automatic CAPTCHA solving, or `null` to disable
+- **captcha_api_key**: Your API key for the CAPTCHA solving service (required if captcha_service is set)
 
 ## Usage
 
@@ -144,10 +147,42 @@ If CAPTCHA appears too often:
    - This maintains cookies and session between runs
    - Reduces CAPTCHA triggers over time
 
-3. **Manual CAPTCHA solving**:
-   - When CAPTCHA appears, the script will pause and wait for you to solve it
-   - You have 60 seconds to solve it manually in the browser
-   - After solving, the script continues automatically
+3. **CAPTCHA handling options** (in `config.json`):
+   - **Automatic solving (Recommended)**: Set `"captcha_service": "2captcha"` and provide your API key
+     - Requires account at [2Captcha](https://2captcha.com/) - costs ~$2.99 per 1000 CAPTCHAs
+     - Solves CAPTCHA automatically without manual intervention
+     - Setup instructions below
+   - **Skip immediately**: Set `"skip_captcha": true` to skip searches with CAPTCHA without waiting
+   - **Manual solving**: Set `"wait_for_captcha_manual": true` to wait 60 seconds for you to solve
+
+### Automatic CAPTCHA Solving Setup
+
+To enable automatic CAPTCHA solving:
+
+1. **Sign up for 2Captcha**:
+   - Go to https://2captcha.com/
+   - Create an account
+   - Add funds to your account (minimum $3 recommended)
+   - Get your API key from the dashboard
+
+2. **Install required package**:
+   ```bash
+   pip install aiohttp
+   ```
+
+3. **Update `config.json`**:
+   ```json
+   {
+     "skip_captcha": false,
+     "wait_for_captcha_manual": false,
+     "captcha_service": "2captcha",
+     "captcha_api_key": "YOUR_2CAPTCHA_API_KEY_HERE"
+   }
+   ```
+
+4. **Replace `YOUR_2CAPTCHA_API_KEY_HERE`** with your actual API key from 2Captcha
+
+The script will now automatically solve CAPTCHAs when they appear!
 
 4. **Reduce frequency**:
    - Don't run the script too often (once per day is recommended)

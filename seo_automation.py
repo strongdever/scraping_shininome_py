@@ -34,7 +34,10 @@ def load_config():
         "delay_between_clicks": [3, 8],
         "headless": False,
         "use_persistent_context": True,
-        "wait_for_captcha_manual": True
+        "wait_for_captcha_manual": True,
+        "skip_captcha": False,
+        "captcha_service": None,
+        "captcha_api_key": None
     }
     
     if os.path.exists(CONFIG_FILE):
@@ -61,6 +64,9 @@ DELAY_BETWEEN_CLICKS = tuple(CONFIG["delay_between_clicks"])
 HEADLESS = CONFIG["headless"]
 USE_PERSISTENT_CONTEXT = CONFIG.get("use_persistent_context", True)
 WAIT_FOR_CAPTCHA_MANUAL = CONFIG.get("wait_for_captcha_manual", True)
+SKIP_CAPTCHA = CONFIG.get("skip_captcha", False)
+CAPTCHA_SERVICE = CONFIG.get("captcha_service", None)  # Options: "2captcha", "anticaptcha", None
+CAPTCHA_API_KEY = CONFIG.get("captcha_api_key", None)
 
 
 class SEOAutomation:
@@ -125,32 +131,226 @@ class SEOAutomation:
         
         return False
     
+    async def solve_captcha_automatically(self, page) -> bool:
+        """Attempt to solve CAPTCHA automatically using a service."""
+        if not CAPTCHA_SERVICE or not CAPTCHA_API_KEY:
+            return False
+        
+        try:
+            # Get the site key from the page
+            site_key = None
+            try:
+                recaptcha_iframe = page.locator("iframe[src*='recaptcha']").first
+                if await recaptcha_iframe.count() > 0:
+                    src = await recaptcha_iframe.get_attribute("src")
+                    if src and "k=" in src:
+                        site_key = src.split("k=")[1].split("&")[0]
+            except:
+                pass
+            
+            if not site_key:
+                # Try to get from page content
+                try:
+                    content = await page.content()
+                    import re
+                    match = re.search(r'data-sitekey="([^"]+)"', content)
+                    if match:
+                        site_key = match.group(1)
+                except:
+                    pass
+            
+            if not site_key:
+                print("   ⚠️  Could not extract reCAPTCHA site key")
+                return False
+            
+            print(f"   🔧 Attempting automatic CAPTCHA solve using {CAPTCHA_SERVICE}...")
+            
+            if CAPTCHA_SERVICE.lower() == "2captcha":
+                return await self._solve_with_2captcha(page, site_key)
+            elif CAPTCHA_SERVICE.lower() == "anticaptcha":
+                return await self._solve_with_anticaptcha(page, site_key)
+            else:
+                print(f"   ⚠️  Unknown CAPTCHA service: {CAPTCHA_SERVICE}")
+                return False
+                
+        except Exception as e:
+            print(f"   ❌ Error in automatic CAPTCHA solving: {e}")
+            return False
+    
+    async def _solve_with_2captcha(self, page, site_key: str) -> bool:
+        """Solve CAPTCHA using 2Captcha service."""
+        try:
+            import aiohttp
+            
+            # Submit CAPTCHA to 2Captcha
+            page_url = page.url
+            async with aiohttp.ClientSession() as session:
+                # Submit task
+                submit_url = "http://2captcha.com/in.php"
+                async with session.post(submit_url, data={
+                    "key": CAPTCHA_API_KEY,
+                    "method": "userrecaptcha",
+                    "googlekey": site_key,
+                    "pageurl": page_url,
+                    "json": 1
+                }) as resp:
+                    result = await resp.json()
+                    if result.get("status") != 1:
+                        print(f"   ❌ 2Captcha error: {result.get('request', 'Unknown error')}")
+                        return False
+                    
+                    task_id = result.get("request")
+                    print(f"   ⏳ CAPTCHA submitted, task ID: {task_id}")
+                
+                # Wait for solution (poll every 5 seconds, max 2 minutes)
+                for _ in range(24):  # 24 * 5 = 120 seconds
+                    await asyncio.sleep(5)
+                    check_url = f"http://2captcha.com/res.php?key={CAPTCHA_API_KEY}&action=get&id={task_id}&json=1"
+                    async with session.get(check_url) as resp:
+                        result = await resp.json()
+                        if result.get("status") == 1:
+                            token = result.get("request")
+                            print(f"   ✅ CAPTCHA solved! Injecting token...")
+                            
+                            # Inject the token using multiple methods
+                            try:
+                                # Method 1: Set the response textarea value
+                                await page.evaluate(f"""
+                                    (function() {{
+                                        var responseElement = document.getElementById('g-recaptcha-response');
+                                        if (responseElement) {{
+                                            responseElement.innerHTML = '{token}';
+                                            responseElement.value = '{token}';
+                                        }}
+                                        
+                                        // Try to find all recaptcha response elements
+                                        var allElements = document.querySelectorAll('[name="g-recaptcha-response"]');
+                                        allElements.forEach(function(el) {{
+                                            el.innerHTML = '{token}';
+                                            el.value = '{token}';
+                                        }});
+                                        
+                                        // Trigger callback if available
+                                        if (typeof ___grecaptcha_cfg !== 'undefined' && ___grecaptcha_cfg.clients) {{
+                                            for (var i = 0; i < ___grecaptcha_cfg.clients.length; i++) {{
+                                                if (___grecaptcha_cfg.clients[i].callback) {{
+                                                    ___grecaptcha_cfg.clients[i].callback('{token}');
+                                                }}
+                                            }}
+                                        }}
+                                        
+                                        // Also try window callback
+                                        if (typeof window.grecaptcha !== 'undefined') {{
+                                            try {{
+                                                window.grecaptcha.getResponse = function() {{ return '{token}'; }};
+                                            }} catch(e) {{
+                                                console.log('Error setting grecaptcha response');
+                                            }}
+                                        }}
+                                    }})();
+                                """)
+                                
+                                await asyncio.sleep(2)
+                                
+                                # Try to submit the form if there's a submit button
+                                try:
+                                    submit_button = page.locator("button[type='submit'], input[type='submit'], button:has-text('Submit'), button:has-text('送信')")
+                                    if await submit_button.count() > 0:
+                                        await submit_button.first.click()
+                                        await asyncio.sleep(2)
+                                except:
+                                    pass
+                                
+                                return True
+                            except Exception as e:
+                                print(f"   ⚠️  Error injecting token: {e}")
+                                return False
+                        elif result.get("request") != "CAPCHA_NOT_READY":
+                            print(f"   ❌ 2Captcha error: {result.get('request', 'Unknown error')}")
+                            return False
+                
+                print(f"   ⏰ Timeout waiting for 2Captcha solution")
+                return False
+        except ImportError:
+            print(f"   ⚠️  aiohttp not installed. Install it with: pip install aiohttp")
+            return False
+        except Exception as e:
+            print(f"   ❌ Error with 2Captcha: {e}")
+            return False
+    
+    async def _solve_with_anticaptcha(self, page, site_key: str) -> bool:
+        """Solve CAPTCHA using AntiCaptcha service."""
+        print(f"   ⚠️  AntiCaptcha integration not yet implemented")
+        return False
+    
     async def handle_captcha(self, page, keyword: str) -> bool:
-        """Handle CAPTCHA - wait for manual solve or skip."""
+        """Handle CAPTCHA - solve automatically, wait for manual solve, or skip."""
         if await self.check_for_captcha(page):
             print(f"\n⚠️  CAPTCHA detected for keyword: '{keyword}'")
             
+            # Option 1: Try automatic solving FIRST (if configured)
+            if CAPTCHA_SERVICE and CAPTCHA_API_KEY:
+                print(f"🤖 Attempting automatic CAPTCHA solving using {CAPTCHA_SERVICE}...")
+                solved = await self.solve_captcha_automatically(page)
+                if solved:
+                    # Wait a bit and check if CAPTCHA is gone
+                    await asyncio.sleep(3)
+                    if not await self.check_for_captcha(page):
+                        print("✅ CAPTCHA solved automatically! Continuing...")
+                        return True
+                    else:
+                        print("⚠️  CAPTCHA still present after automatic solve")
+                        # Try clicking the submit button if it exists
+                        try:
+                            submit_btn = page.locator("button[type='submit'], button:has-text('Submit'), button:has-text('送信')")
+                            if await submit_btn.count() > 0:
+                                await submit_btn.first.click()
+                                await asyncio.sleep(2)
+                        except:
+                            pass
+            
+            # Option 2: Skip CAPTCHA but continue searching (if skip_captcha enabled)
+            if SKIP_CAPTCHA:
+                print("⏭️  CAPTCHA detected but continuing anyway (skip_captcha enabled).")
+                print("   Attempting to continue search despite CAPTCHA...")
+                # Wait a bit and try to continue
+                await asyncio.sleep(random.uniform(2, 4))
+                # Try to refresh the page to see if we can proceed
+                try:
+                    await page.reload(wait_until="domcontentloaded")
+                    await asyncio.sleep(random.uniform(1, 2))
+                    # Check if CAPTCHA is still there
+                    if await self.check_for_captcha(page):
+                        print("   ⚠️  CAPTCHA still present, but continuing search anyway...")
+                    else:
+                        print("   ✅ CAPTCHA cleared after refresh!")
+                except:
+                    pass
+                # Return True to continue despite CAPTCHA
+                return True
+            
+            # Option 3: Wait for manual solve (unlimited time)
             if WAIT_FOR_CAPTCHA_MANUAL:
                 print("⏸️  Waiting for you to solve CAPTCHA manually...")
                 print("   Please solve the CAPTCHA in the browser window.")
-                print("   The script will continue automatically after 60 seconds.")
-                print("   (You can solve it anytime during this wait)")
+                print("   The script will wait UNLIMITED time until you solve it.")
+                print("   (Press Ctrl+C to cancel if needed)")
                 
-                # Wait up to 60 seconds for CAPTCHA to be solved
-                for i in range(60):
-                    await asyncio.sleep(1)
+                # Wait indefinitely for CAPTCHA to be solved
+                check_count = 0
+                while True:
+                    await asyncio.sleep(2)  # Check every 2 seconds
+                    check_count += 1
+                    
                     if not await self.check_for_captcha(page):
                         print("✅ CAPTCHA appears to be solved! Continuing...")
                         await asyncio.sleep(2)
                         return True
-                    if i % 10 == 0 and i > 0:
-                        print(f"   Still waiting... ({60-i} seconds remaining)")
-                
-                if await self.check_for_captcha(page):
-                    print("⏰ Timeout waiting for CAPTCHA. Skipping this search.")
-                    return False
-                else:
-                    return True
+                    
+                    # Print status every 30 seconds (15 checks * 2 seconds)
+                    if check_count % 15 == 0:
+                        elapsed_minutes = (check_count * 2) // 60
+                        print(f"   ⏳ Still waiting for manual CAPTCHA solve... ({elapsed_minutes} minute(s) elapsed)")
             else:
                 print("⏭️  Skipping this search due to CAPTCHA.")
                 return False
@@ -405,9 +605,13 @@ class SEOAutomation:
             
             # Check for CAPTCHA before searching
             if await self.check_for_captcha(page):
-                if not await self.handle_captcha(page, keyword):
-                    result["error"] = "CAPTCHA detected and not solved"
+                captcha_handled = await self.handle_captcha(page, keyword)
+                if not captcha_handled:
+                    # Only skip if handle_captcha explicitly returns False (not skip mode)
+                    result["error"] = "CAPTCHA detected and could not proceed"
+                    print(f"⏭️  Skipping keyword '{keyword}' due to CAPTCHA")
                     return result
+                # If skip_captcha is enabled, captcha_handled will be True and we continue
             
             # Find search box and enter keyword with human-like typing
             search_box = page.locator("textarea[name='q'], input[name='q']")
@@ -427,12 +631,24 @@ class SEOAutomation:
             
             # Check for CAPTCHA after search
             if await self.check_for_captcha(page):
-                if not await self.handle_captcha(page, keyword):
-                    result["error"] = "CAPTCHA detected after search"
+                captcha_handled = await self.handle_captcha(page, keyword)
+                if not captcha_handled:
+                    # Only skip if handle_captcha explicitly returns False (not skip mode)
+                    result["error"] = "CAPTCHA detected after search and could not proceed"
+                    print(f"⏭️  Skipping keyword '{keyword}' due to CAPTCHA")
                     return result
+                # If skip_captcha is enabled, captcha_handled will be True and we continue
             
             # Get domain for searching
             domain = self.target_url.replace("https://", "").replace("http://", "").split("/")[0]
+            
+            # Check if CAPTCHA is blocking the search results
+            # If skip_captcha is enabled, try to proceed anyway
+            if await self.check_for_captcha(page):
+                if SKIP_CAPTCHA:
+                    print("⚠️  CAPTCHA present on results page, but continuing search anyway...")
+                    # Try to scroll past CAPTCHA or wait a bit
+                    await asyncio.sleep(random.uniform(2, 3))
             
             # Search through all pages until found or no more pages
             current_page = 1
@@ -440,6 +656,17 @@ class SEOAutomation:
             
             while True:
                 print(f"📄 Checking page {current_page}...")
+                
+                # Check for CAPTCHA on current page
+                if await self.check_for_captcha(page):
+                    if SKIP_CAPTCHA:
+                        print("   ⚠️  CAPTCHA detected on this page, but continuing...")
+                        await asyncio.sleep(random.uniform(1, 2))
+                    else:
+                        # If not in skip mode, handle normally
+                        captcha_handled = await self.handle_captcha(page, keyword)
+                        if not captcha_handled:
+                            break
                 
                 # Random scroll to appear more human-like
                 await page.evaluate("window.scrollTo(0, Math.random() * 300)")
@@ -476,9 +703,13 @@ class SEOAutomation:
                     
                     # Check for CAPTCHA on new page
                     if await self.check_for_captcha(page):
-                        if not await self.handle_captcha(page, keyword):
-                            result["error"] = f"CAPTCHA detected on page {current_page}"
+                        captcha_handled = await self.handle_captcha(page, keyword)
+                        if not captcha_handled:
+                            # Only skip if handle_captcha explicitly returns False (not skip mode)
+                            result["error"] = f"CAPTCHA detected on page {current_page} and could not proceed"
+                            print(f"⏭️  Skipping keyword '{keyword}' due to CAPTCHA on page {current_page}")
                             break
+                        # If skip_captcha is enabled, captcha_handled will be True and we continue
                 else:
                     # No more pages available
                     no_more_pages = True
