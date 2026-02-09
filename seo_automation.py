@@ -30,7 +30,7 @@ def load_config():
             "salesforce 大阪",
             "Salesforce伴走支援"
         ],
-        "target_url": "https://shinonome.llc/",
+        "target_url": "https://shinonome.llc",
         "max_results_to_check": 10,
         "delay_between_searches": [5, 12],
         "delay_between_clicks": [3, 8],
