@@ -23,9 +23,11 @@ def load_config():
     defaults = {
         "keywords": [
             "大阪 salesforce 導入支援",
+            "CRM Analytics導入支援",
             "大阪 salesforce",
-            "salesforce 大阪",
             "Salesforce導入支援",
+            "Salesforceの導入・伴走支援およびCRM Analytics",
+            "salesforce 大阪",
             "Salesforce伴走支援"
         ],
         "target_url": "https://shinonome.llc/",
